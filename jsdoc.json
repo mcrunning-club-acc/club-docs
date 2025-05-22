@@ -1,11 +1,13 @@
 {
   "source": {
-    "include": ["."],
-    "exclude": ["node_modules", "docs", ".github"]
+    "include": ["src"],
+    "includePattern": ".+\\.js(doc|x)?$",
+    "excludePattern": "(^|\\/|\\\\)_"
   },
   "opts": {
-    "destination": "docs",
+    "destination": "./docs",
+    "template": "default",
     "recurse": true,
-    "template": "default"
+    "readme": "./README.md"
   }
 }
