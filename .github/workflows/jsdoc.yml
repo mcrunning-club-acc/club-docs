@@ -1,9 +1,8 @@
-name: Generate JSDoc
+name: Generate and Deploy Docs
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]  # or 'master', depending on your default
 
 jobs:
   build:
@@ -13,16 +12,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      - name: Install JSDoc
-        run: npm install -g jsdoc
+      - name: Install dependencies
+        run: npm install
 
       - name: Generate documentation
-        run: jsdoc -c jsdoc.json
+        run: npm run docs
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
