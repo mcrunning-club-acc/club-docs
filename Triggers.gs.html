@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: Triggers.gs</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: Triggers.gs</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/*
+Copyright 2025 Andrey Gonzalez (for McGill Students Running Club)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+const TRIGGER_FUNC = runFeeChecker.name;
+const TRIGGER_BASE_ID = 'feeCheckTrigger';
+const FEE_MAX_CHECKS = 2;
+const TRIGGER_FREQUENCY = 5;  // Minutes
+
+
+/**
+ * Handler function for time-based trigger to check fee payment.
+ * 
+ * No arguments allowed since trigger does not accept any.
+ * 
+ * @author [Andrey Gonzalez](&lt;andrey.gonzalez@mail.mcgill.ca>)
+ * @date  May 20, 2025
+ * @update  May 20, 2025
+ */
+
+function createNewFeeTrigger_(row, feeDetails) {
+  const scriptProperties = PropertiesService.getScriptProperties();
+
+  const trigger = ScriptApp.newTrigger(TRIGGER_FUNC)
+    .timeBased()
+    .everyMinutes(TRIGGER_FREQUENCY)
+    .create();
+
+  // Store trigger details using 'fullName' as key
+  const triggerData = JSON.stringify({
+    tries: 1,
+    triggerId: trigger.getUniqueId(),
+    feeDetails: feeDetails,
+    rowNum: row,
+  });
+
+  // Label trigger key with member name, and log trigger data
+  const key = TRIGGER_BASE_ID + (feeDetails.fullName).replace(' ', '');
+  
+  scriptProperties.setProperty(key, triggerData);
+  Logger.log(`Created new trigger '${key}', running every ${TRIGGER_FREQUENCY} min.\n\n${triggerData}`);
+}
+
+
+/**
+ * Handler function for time-based trigger to check fee payment.
+ * 
+ * No arguments allowed since trigger does not accept any.
+ * Workaround: store member details in script properties.
+ * 
+ * @author [Andrey Gonzalez](&lt;andrey.gonzalez@mail.mcgill.ca>)
+ * @date  May 20, 2025
+ * @update  May 20, 2025
+ */
+
+function runFeeChecker() {
+  const scriptProperties = PropertiesService.getScriptProperties();
+  const allProps = scriptProperties.getProperties();
+
+  for (let key in allProps) {
+    if (!key.startsWith(TRIGGER_BASE_ID)) continue;
+
+    const triggerData = JSON.parse(allProps[key]);
+    const { tries, triggerId, feeDetails, rowNum } = triggerData;
+    
+    if (isPaymentFound(rowNum)) {
+      // If found, clean up trigger and data in script properties
+      cleanUpTrigger(key, triggerId);
+      Logger.log(`✅ Payment found for '${feeDetails.fullName}' after ${tries} tries`);
+    }
+    else if (tries &lt;= FEE_MAX_CHECKS) {
+      // Limit not reach, check again and increment 'tries'
+      incrementTries(key, triggerData);
+      checkThisFeeAgain(feeDetails);
+    }
+    else {
+      // Send email notification if limit is reached
+      cleanUpTrigger(key, triggerId);
+      notifyUnidentifiedPayment_(feeDetails.fullName);
+      Logger.log(`❌ Max tries reached for '${feeDetails.fullName}', sending email and stopping checks`);
+    }
+  }
+
+  /** Helper: check if payment already found */
+  function isPaymentFound(memberRow) {
+    const sheet = GET_REGISTRATION_SHEET_();
+    const confirmedCol = COL_MAP.paymentConfirmed + 1;
+    const currentFeeValue = sheet.getRange(memberRow, confirmedCol).getValue().toString();
+    return currentFeeValue.trim() == true;
+  }
+
+  /** Helper: increment tries and log data */
+  function incrementTries(key, triggerData) {
+    Logger.log(`Fee payment check #${triggerData.tries} for '${triggerData.feeDetails.fullName}'`);
+    triggerData.tries++;
+    scriptProperties.setProperty(key, JSON.stringify(triggerData));
+  }
+
+  /** Helper: check for payment again */
+  function checkThisFeeAgain(feeDetails) {
+    const isPaid = checkPayment_(feeDetails);
+    if (isPaid) {
+      setFeePaid_(row);
+    }
+    Logger.log(`➡️ Payment verification for '${feeDetails.fullName}' returned: ${isPaid}`);
+  }
+
+  /** Helper: remove trigger and data in script properties */
+  function cleanUpTrigger(key, triggerId) {
+    deleteTriggerById(triggerId);
+    scriptProperties.deleteProperty(key);
+  }
+
+  /** Helper: delete a trigger by ID */
+  function deleteTriggerById(triggerId) {
+    const triggers = ScriptApp.getProjectTriggers();
+    let isFound = false;
+
+    for (let trigger of triggers) {
+      if (trigger.getUniqueId() === triggerId) {
+        isFound = true;
+        ScriptApp.deleteTrigger(trigger);
+        break;
+      }
+    }
+    // Log success or throw error if not found
+    const raiseError = () => { throw new Error(`⚠️ Trigger with id ${triggerId} not found`) }
+    isFound ? Logger.log(`Trigger with id ${triggerId} deleted!`) : raiseError();
+  }
+}
+
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Global</h3><ul><li><a href="global.html#COL_MAP">COL_MAP</a></li><li><a href="global.html#ONLINE_LABEL">ONLINE_LABEL</a></li><li><a href="global.html#SHEET_NAME">SHEET_NAME</a></li><li><a href="global.html#ZEFFY_EMAIL">ZEFFY_EMAIL</a></li><li><a href="global.html#addImportTriggerUI_">addImportTriggerUI_</a></li><li><a href="global.html#addMissingCheckboxes_">addMissingCheckboxes_</a></li><li><a href="global.html#checkInteracPayment_">checkInteracPayment_</a></li><li><a href="global.html#cleanUpMatchedThread_">cleanUpMatchedThread_</a></li><li><a href="global.html#confirmAndRunUserChoice_">confirmAndRunUserChoice_</a></li><li><a href="global.html#createNewFeeTrigger_">createNewFeeTrigger_</a></li><li><a href="global.html#createSearchTerms_">createSearchTerms_</a></li><li><a href="global.html#createTestObj_">createTestObj_</a></li><li><a href="global.html#divide">divide</a></li><li><a href="global.html#doPost">doPost</a></li><li><a href="global.html#extractPaymentInfo_">extractPaymentInfo_</a></li><li><a href="global.html#formatSpecificColumns">formatSpecificColumns</a></li><li><a href="global.html#getCurrentUserEmail_">getCurrentUserEmail_</a></li><li><a href="global.html#getGmailLabel_">getGmailLabel_</a></li><li><a href="global.html#getLastRowInReg_">getLastRowInReg_</a></li><li><a href="global.html#getMatchingPayments_">getMatchingPayments_</a></li><li><a href="global.html#getUserTimeZone_">getUserTimeZone_</a></li><li><a href="global.html#helpUI_">helpUI_</a></li><li><a href="global.html#isValidRow_">isValidRow_</a></li><li><a href="global.html#matchMemberInPaymentEmail_">matchMemberInPaymentEmail_</a></li><li><a href="global.html#multiply">multiply</a></li><li><a href="global.html#notifyUnidentifiedPayment_">notifyUnidentifiedPayment_</a></li><li><a href="global.html#onNewRegistration_">onNewRegistration_</a></li><li><a href="global.html#onOpen">onOpen</a></li><li><a href="global.html#prettifySheetUI_">prettifySheetUI_</a></li><li><a href="global.html#processInteracThreads_">processInteracThreads_</a></li><li><a href="global.html#processOnlineThread_">processOnlineThread_</a></li><li><a href="global.html#processRowInput_">processRowInput_</a></li><li><a href="global.html#removeDiacritics_">removeDiacritics_</a></li><li><a href="global.html#requestRowInput_">requestRowInput_</a></li><li><a href="global.html#runFeeChecker">runFeeChecker</a></li><li><a href="global.html#setFeePaid_">setFeePaid_</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 4.0.4</a> on Thu May 22 2025 21:47:32 GMT+0000 (Coordinated Universal Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

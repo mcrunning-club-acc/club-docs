@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: Inbox.gs</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: Inbox.gs</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/*
+Copyright 2025 Andrey Gonzalez (for McGill Students Running Club)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+/** LABELS FOR GMAIL ACCOUNT */
+const ONLINE_LABEL = 'Fee Payments/Online';
+const INTERAC_LABEL = 'Fee Payments/Interac Emails';
+
+
+/** 1️⃣ HELPER FUNCTIONS FOR ZEFFY AND INTERAC */
+
+function getGmailLabel_(labelName) {
+  return GmailApp.getUserLabelByName(labelName);
+}
+
+// Get threads from search (from:sender, starting:minDate, in:inbox)
+function getGmailSearchString_(sender, offset) {
+  const minDate = new Date(Date.now() - offset);
+  const formattedDate = Utilities.formatDate(minDate, TIMEZONE, 'yyyy/MM/dd');
+  return `from:(${sender}) in:inbox after:${formattedDate}`;
+}
+
+/**
+ * Marks a fully processed thread as read, archives it, and moves it to the `label` folder.
+ */
+
+function cleanUpMatchedThread_(thread, label) {
+  thread.markRead();
+  thread.moveToArchive();
+  thread.addLabel(label);
+
+  console.log('Thread cleaned up. Now removed from inbox');
+}
+
+
+/**
+ * Checks if a member's information is present in the email body.
+ * 
+ * @param {string[]}  searchTerms. Search terms for match regex.
+ * @param {string} emailBody  The body of the payment.
+ *  
+ * @author [Andrey Gonzalez](&lt;andrey.gonzalez@mail.mcgill.ca>)
+ * @date  Mar 15, 2025
+ * @update Apr 21, 2025
+ * 
+ */
+
+function matchMemberInPaymentEmail_(searchTerms, emailBody) {
+  if (searchTerms.length === 0) return false; // Prevent empty regex errors
+
+  const formatedBody = emailBody.replace(/\*/g, '');    // Remove astericks around terms
+  const searchPattern = new RegExp(`\\b(${searchTerms.join('\\b|\\b')})\\b`, 'i');
+  return searchPattern.test(formatedBody);
+}
+
+
+/**
+ * Return latest emails of payment notification.
+ * 
+ * If not found, wait multiple times for email to arrive in McRUN inbox.
+ * 
+ * @param {string} sender  Email of sender (Interac or Zeffy).
+ * @param {number} maxMatches  Number of max tries.
+ *  
+ * @author [Andrey Gonzalez](&lt;andrey.gonzalez@mail.mcgill.ca>)
+ * @date  Mar 16, 2025
+ * @update  Apr 29, 2025
+ */
+
+function getMatchingPayments_(sender, maxMatches) {
+  // Ensure that correct mailbox is used
+  if (getCurrentUserEmail_() !== CLUB_EMAIL) {
+    throw new Error('Wrong account! Please switch to McRUN\'s Gmail account');
+  }
+  
+  const dateOffset = 2 * 24 * 60 * 60 * 1000;   // 2 days in milliseconds
+  const searchStr = getGmailSearchString_(sender, dateOffset);
+  let threads = [];
+  let delay = 10 * 1000; // Start with 10 seconds
+
+  // Search inbox until successful (max 3 tries)
+  for (let tries = 0; tries &lt; 3 &amp;&amp; threads.length === 0; tries++) {
+    if (tries > 0) Utilities.sleep(delay);  // Wait only on retries
+    threads = GmailApp.search(searchStr, 0, maxMatches);
+    delay *= 3; // Exponential backoff (10s → 30s → 90s)
+  }
+
+  return threads;
+}
+
+
+
+/** 2️⃣ 👉 FUNCTION HANDLING STRIPE OR ZEFFY TRANSACTIONS 👈  *\
+
+/**
+ * Process a single Gmail thread to find a matching member's payment.
+ */
+
+function processOnlineThread_(thread, searchTerms) {
+  const messages = thread.getMessages();
+  let starredCount = 0;
+  let isFoundInMessage = false;
+
+  for (const message of messages) {
+    if (message.isStarred()) {
+      starredCount++; // Already processed, skip
+      continue;
+    }
+
+    const emailBody = message.getPlainBody();
+    isFoundInMessage = matchMemberInPaymentEmail_(searchTerms, emailBody);
+
+    if (isFoundInMessage) {
+      message.star();
+      starredCount++;
+    }
+  }
+
+  if (starredCount === messages.length) {
+    const zeffyLabel = getGmailLabel_(ONLINE_LABEL);
+    cleanUpMatchedThread_(thread, zeffyLabel);
+  }
+
+  return isFoundInMessage;
+}
+
+
+
+/**  3️⃣ 👉 FUNCTIONS HANDLING INTERAC TRANSACTIONS 👈  */
+
+// Interac e-Transfer emails can be matched by a member's full name
+function processInteracThreads_(thread, searchTerms) {
+  const messages = thread.getMessages();
+
+  for (message of messages) {
+    const emailBody = message.getPlainBody();
+
+    // Try matching Interac e-Transfer email with member's reference number or name
+    const isFoundInMessage = matchMemberInPaymentEmail_(searchTerms, emailBody);
+
+    if (isFoundInMessage) {
+      cleanUpMatchedThread_(thread, getGmailLabel_(INTERAC_LABEL));
+      return true;
+    }
+  }
+
+  return false;
+}
+
+
+/** EMAIL NOTIFICATION */
+
+function notifyUnidentifiedPayment_(fullName) {
+  const emailBody = 
+  `
+  Cannot find the payment confirmation email for ${fullName}.
+      
+  Please manually check the inbox and update registration as required.
+
+  If email not found, please notify member of outstanding member fee.
+      
+  Automatic email created by 'McRace Code' in Google Apps Script.
+  `
+  const email = {
+    to: INTERNAL_EMAIL,
+    subject: 'ATTENTION: Missing Member Payment for McRace 2025!',
+    body: emailBody.replace(/[ \t]{2,}/g, ''),
+    options: {
+      cc: CLUB_EMAIL
+    }
+  };
+
+  GmailApp.sendEmail(email.to, email.subject, email.body, email.options);
+}
+
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Global</h3><ul><li><a href="global.html#COL_MAP">COL_MAP</a></li><li><a href="global.html#ONLINE_LABEL">ONLINE_LABEL</a></li><li><a href="global.html#SHEET_NAME">SHEET_NAME</a></li><li><a href="global.html#ZEFFY_EMAIL">ZEFFY_EMAIL</a></li><li><a href="global.html#addImportTriggerUI_">addImportTriggerUI_</a></li><li><a href="global.html#addMissingCheckboxes_">addMissingCheckboxes_</a></li><li><a href="global.html#checkInteracPayment_">checkInteracPayment_</a></li><li><a href="global.html#cleanUpMatchedThread_">cleanUpMatchedThread_</a></li><li><a href="global.html#confirmAndRunUserChoice_">confirmAndRunUserChoice_</a></li><li><a href="global.html#createNewFeeTrigger_">createNewFeeTrigger_</a></li><li><a href="global.html#createSearchTerms_">createSearchTerms_</a></li><li><a href="global.html#createTestObj_">createTestObj_</a></li><li><a href="global.html#divide">divide</a></li><li><a href="global.html#doPost">doPost</a></li><li><a href="global.html#extractPaymentInfo_">extractPaymentInfo_</a></li><li><a href="global.html#formatSpecificColumns">formatSpecificColumns</a></li><li><a href="global.html#getCurrentUserEmail_">getCurrentUserEmail_</a></li><li><a href="global.html#getGmailLabel_">getGmailLabel_</a></li><li><a href="global.html#getLastRowInReg_">getLastRowInReg_</a></li><li><a href="global.html#getMatchingPayments_">getMatchingPayments_</a></li><li><a href="global.html#getUserTimeZone_">getUserTimeZone_</a></li><li><a href="global.html#helpUI_">helpUI_</a></li><li><a href="global.html#isValidRow_">isValidRow_</a></li><li><a href="global.html#matchMemberInPaymentEmail_">matchMemberInPaymentEmail_</a></li><li><a href="global.html#multiply">multiply</a></li><li><a href="global.html#notifyUnidentifiedPayment_">notifyUnidentifiedPayment_</a></li><li><a href="global.html#onNewRegistration_">onNewRegistration_</a></li><li><a href="global.html#onOpen">onOpen</a></li><li><a href="global.html#prettifySheetUI_">prettifySheetUI_</a></li><li><a href="global.html#processInteracThreads_">processInteracThreads_</a></li><li><a href="global.html#processOnlineThread_">processOnlineThread_</a></li><li><a href="global.html#processRowInput_">processRowInput_</a></li><li><a href="global.html#removeDiacritics_">removeDiacritics_</a></li><li><a href="global.html#requestRowInput_">requestRowInput_</a></li><li><a href="global.html#runFeeChecker">runFeeChecker</a></li><li><a href="global.html#setFeePaid_">setFeePaid_</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 4.0.4</a> on Thu May 22 2025 21:47:32 GMT+0000 (Coordinated Universal Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>
