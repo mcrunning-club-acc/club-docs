@@ -6,8 +6,6 @@
   },
   "opts": {
     "destination": "./docs",
-    "template": "default",
-    "recurse": true,
-    "readme": "./README.md"
+    "recurse": true
   }
 }
